@@ -1,0 +1,1 @@
+This folder contains experiment code. Here covers training and inference running Python modules. Among experiments are DPO, GRPO, Knowledge Graph, Out of Distribution, Prompt Engineering, QLoRA fine-tuning.

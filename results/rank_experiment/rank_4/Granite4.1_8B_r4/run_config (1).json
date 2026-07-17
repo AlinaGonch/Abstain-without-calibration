@@ -1,0 +1,16 @@
+{
+  "model_id": "ibm-granite/granite-4.1-8b",
+  "ratio": 0.3,
+  "lora_rank": 4,
+  "lora_alpha": 8,
+  "lora_dropout": 0.15,
+  "learning_rate": 0.0001,
+  "batch_size": 16,
+  "grad_accum": 1,
+  "effective_batch": 16,
+  "probe_enabled": true,
+  "probe_every": 50,
+  "total_train_n": 20000,
+  "seed": 42,
+  "hub_repo": "AlinaGonch/granite41-8b-squad-ratio-0.30-r4"
+}

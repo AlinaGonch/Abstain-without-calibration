@@ -1,0 +1,33 @@
+{
+  "ratio_0.30": {
+    "overall_f1": 75.68937510310566,
+    "overall_em": 70.0625,
+    "has_ans_f1": 89.10375020621132,
+    "has_ans_em": 77.85,
+    "abstention_recall": 62.275000000000006,
+    "no_ans_f1": 62.275000000000006,
+    "overall_f1_legacy": 75.69679268552325,
+    "strictness": 1.25,
+    "coverage": 68.2375,
+    "abstention_precision": 98.03227075954348,
+    "abstention_f1": 76.16572389542884,
+    "overall_ci_low": 74.80109428856161,
+    "overall_ci_high": 76.54914280530616,
+    "total": 8000,
+    "has_ans_total": 4000,
+    "no_ans_total": 4000,
+    "ece_f1_0.5": 0.7171799974938877,
+    "brier_f1_0.5": 0.6924677786084805,
+    "ece_em": 0.6494299974938875,
+    "brier_em": 0.6328058275300875,
+    "mean_confidence": 0.05182000250611236,
+    "ece_abstention": 0.44817999749388765,
+    "verbal_compliance": 99.5,
+    "verbal_ece_f1_0.5": 0.46167713567839197,
+    "verbal_brier_f1_0.5": 0.46756375628140706,
+    "verbal_ece_em": 0.5286369346733668,
+    "verbal_brier_em": 0.5343099874371859,
+    "verbal_mean_confidence": 0.7179836683417085,
+    "verbal_ece_abstention": 0.21760678391959798
+  }
+}

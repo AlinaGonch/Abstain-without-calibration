@@ -1,0 +1,1 @@
+This folder contains Python modules which run general benchmarks to rate models performance on the common tasks and a specially instruction following. Benchmarks presented here:
