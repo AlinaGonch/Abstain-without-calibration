@@ -1,0 +1,1 @@
+This folder contains Python modules that run metrics to eval experiment performance, plot results and compress them into tables. All results will be safed depending on a data type, and transformed into figures or results.
