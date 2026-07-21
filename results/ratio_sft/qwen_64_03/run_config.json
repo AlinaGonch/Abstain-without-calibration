@@ -1,0 +1,16 @@
+{
+  "model_id": "Qwen/Qwen3-14B",
+  "ratio": 0.3,
+  "lora_rank": 64,
+  "lora_alpha": 128,
+  "lora_dropout": 0.15,
+  "learning_rate": 0.0001,
+  "batch_size": 16,
+  "grad_accum": 1,
+  "effective_batch": 16,
+  "probe_enabled": true,
+  "probe_every": 50,
+  "total_train_n": 20000,
+  "seed": 42,
+  "hub_repo": "AlinaGonch/qwen3-14b-squad-ratio-0.30-r64"
+}

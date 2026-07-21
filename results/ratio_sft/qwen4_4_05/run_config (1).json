@@ -1,0 +1,16 @@
+{
+  "model_id": "Qwen/Qwen3-4B-Instruct-2507",
+  "ratio": 0.5,
+  "lora_rank": 4,
+  "lora_alpha": 8,
+  "lora_dropout": 0.15,
+  "learning_rate": 0.0001,
+  "batch_size": 16,
+  "grad_accum": 1,
+  "effective_batch": 16,
+  "probe_enabled": true,
+  "probe_every": 50,
+  "total_train_n": 20000,
+  "seed": 42,
+  "hub_repo": "AlinaGonch/qwen3-4b-instruct-squad-ratio-0.50-r4"
+}

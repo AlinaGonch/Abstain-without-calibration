@@ -1,0 +1,19 @@
+{
+  "overall_f1": 90.14902158299219,
+  "overall_em": 87.7,
+  "has_ans_f1": 90.86148912247424,
+  "has_ans_em": 85.94377510040161,
+  "abstention_recall": 89.44223107569721,
+  "no_ans_f1": 89.44223107569721,
+  "overall_f1_legacy": 90.18902158299218,
+  "strictness": 5.020080321285141,
+  "coverage": 52.6,
+  "abstention_precision": 94.72573839662446,
+  "abstention_f1": 92.00819672131146,
+  "overall_ci_low": 88.4437335927961,
+  "overall_ci_high": 91.81394601109676,
+  "total": 1000,
+  "has_ans_total": 498,
+  "no_ans_total": 502,
+  "rouge_l": 90.18902158299218
+}
