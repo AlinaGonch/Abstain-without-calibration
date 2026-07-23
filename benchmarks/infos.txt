@@ -1,1 +1,7 @@
 This folder contains Python modules which run general benchmarks to rate models performance on the common tasks and a specially instruction following. Benchmarks presented here:
+- MMLU-Pro
+- FaithEval
+- GRQA-Abstain (AbstentionBenchmark)
+- GSM8K-Abstain (AbstentionBenchmark)
+- HotPotQA
+- NoMIRACL
