@@ -1,1 +1,1 @@
-This folders contains variation on the datasets or Python modules to create modifications of the datasets used in thesis experiments
+This folders contains saved jsonl versions of data which were used for experiments .
