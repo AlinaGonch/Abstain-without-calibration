@@ -61,15 +61,18 @@ import sys
 import time
 from typing import Any, Dict, List, Optional
 
-import torch
-import gc
 from tqdm.auto import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer
-import importlib
 
 from ood_metrics import (annotate, compute_aggregate, compute_curves,
                          compute_decision_calibration, compute_decision_curves)
 from ood_common import FINAL_RESPONSE_MARKER, ABSTAIN_STRING
+from evaluation.token_uncertainty import (
+    compute_decision_abstention_stats,
+    compute_step_uncertainty,
+    final_response_token_span,
+    score_refusal_templates,
+    summarize_answer_span,
+)
 
 # ---- Hub discovery (verbatim contract from your general runner) ------------
 HUB_AUTHOR = "AlinaGonch"
@@ -83,8 +86,7 @@ MODEL_PRESETS: Dict[str, Dict[str, Any]] = {
     "granite-4.1-8b":{"base_repo": "ibm-granite/granite-4.1-8b",       "hub_name_filter": "granite41-8b", "family": "granite"},
     "phi-3-mini":    {"base_repo": "microsoft/Phi-3-mini-4k-instruct", "hub_name_filter": "phi3-mini", "family": "phi"},
     "phi3-medium":    {"base_repo": "microsoft/Phi-3-medium-4k-instruct", "hub_name_filter": "phi3-medium", "family": "phi"},
-    "qwen3-4b":      {"base_repo": "Qwen/Qwen3-4B-Instruct-2507",                    "hub_name_filter": "qwen3-4b", "family": "qwen3"},
-    "qwen3-14b":      {"base_repo": "Qwen/Qwen3-14B",                    "hub_name_filter": "qwen3-4b", "family": "qwen3"},
+    "qwen3-4b":      {"base_repo": "Qwen/Qwen3-4B",                    "hub_name_filter": "qwen3-4b", "family": "qwen3"},
     "gemma-3-4b":    {"base_repo": "google/gemma-3-4b-it",            "hub_name_filter": "gemma3-4b", "family": "gemma"},
 }
 
@@ -154,7 +156,8 @@ def render_prompt(tokenizer, messages: List[Dict[str, str]], family: str) -> str
 
 # ---- model load / generate -------------------------------------------------
 def load_base(base_repo: str):
-    
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
     tok = AutoTokenizer.from_pretrained(base_repo, trust_remote_code=False)
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
@@ -330,7 +333,8 @@ def generate_batch(model, tokenizer, input_ids_list: List[List[int]],
                    max_new_tokens: int):
     """Greedy-generate a whole batch at once.
 
-    Returns (texts, span_confs, decision_confs, mean_confs):
+    Returns (texts, span_confs, decision_confs, mean_confs, diagnostics,
+    refusal_scores).  Diagnostics are compact scalars unless explicitly enabled.
         texts          -- list[str], decoded continuations (specials stripped)
         span_confs     -- list[float], the ID-MATCHING PRIMARY channel:
                           exp(mean logprob) over the ANSWER-SPAN tokens only
@@ -344,7 +348,7 @@ def generate_batch(model, tokenizer, input_ids_list: List[List[int]],
         mean_confs     -- list[float], arithmetic mean token prob over all
                           generated tokens (old proxy, diagnostic only).
     """
-    
+    import torch
 
     # left-pad the (pre-tokenized, cached) prompts -> [B, L_in]
     enc = tokenizer.pad({"input_ids": input_ids_list},
@@ -369,7 +373,8 @@ def generate_batch(model, tokenizer, input_ids_list: List[List[int]],
 
     B, T = gen_tokens.shape
     if T == 0:
-        return texts, [0.0] * B, [None] * B, [None] * B
+        empty = [dict(summarize_answer_span([]), answer_span_marker_found=False) for _ in range(B)]
+        return texts, [0.0] * B, [None] * B, [None] * B, empty, [None] * B
 
     # resolve eos id(s); some families (e.g. llama3) use several
     try:
@@ -415,6 +420,10 @@ def generate_batch(model, tokenizer, input_ids_list: List[List[int]],
     token_lists = gen_tokens.tolist()
     span_confs: List[float] = []
     decision_confs: List[Optional[float]] = []
+    diagnostics: List[Dict[str, Any]] = []
+    refusal_scores: List[Optional[Dict[str, Any]]] = []
+    save_token_traces = os.environ.get("SAVE_TOKEN_TRACES", "0") == "1"
+    score_refusal = os.environ.get("SCORE_REFUSAL_TEMPLATES", "0") == "1"
     for i in range(B):
         # the row's real content: exclude EOS itself from the span (ID cuts
         # BEFORE the first terminator), hence keep-count minus trailing eos.
@@ -423,29 +432,40 @@ def generate_batch(model, tokenizer, input_ids_list: List[List[int]],
             row_len -= 1
         row = token_lists[i][:row_len]
 
-        a_start, a_end, marker_found = _final_response_token_span(tokenizer, row)
+        # Shared answer-span contract: last marker, before Confidence, no-marker fallback.
+        a_start, a_end, marker_found = final_response_token_span(row, tokenizer)
 
         # PRIMARY: answer-span exp(mean logprob), ID fallbacks preserved
-        if a_end > a_start:
-            span_lp = chosen_lp[i, a_start:a_end]
-            span_confs.append(float(span_lp.mean().exp().clamp(0.0, 1.0)))
-        else:
-            span_confs.append(0.0)   # empty answer = abstention with no evidence
+        stats = [compute_step_uncertainty(step_scores[t][i], row[t])
+                 for t in range(a_start, min(a_end, n_steps))]
+        answer_ids = row[a_start:a_end]
+        diag = summarize_answer_span(
+            stats, answer_ids,
+            [tokenizer.decode([token_id], skip_special_tokens=True) for token_id in answer_ids],
+            save_token_traces=save_token_traces,
+        )
+        diag["answer_span_marker_found"] = marker_found
+        # Legacy channel intentionally remains 0.0 for an empty answer span.
+        span_confs.append(float(torch.exp(torch.tensor(diag["answer_mean_logprob"])).clamp(0.0, 1.0))
+                          if diag["answer_mean_logprob"] is not None else 0.0)
 
         # SECONDARY: abstain-mass at the first answer-span token
         if not marker_found or a_end <= a_start or a_start >= len(step_scores):
+            diag.update(compute_decision_abstention_stats(torch.empty(0), []))
             decision_confs.append(None)
-            continue
-        p = torch.softmax(step_scores[a_start][i].float(), dim=-1)
-        abstain_mass = p.index_select(0, abstain_idx).sum().item()
-        decision_confs.append(1.0 - min(1.0, max(0.0, abstain_mass)))
+        else:
+            diag.update(compute_decision_abstention_stats(step_scores[a_start][i], abstain_idx.tolist()))
+            decision_confs.append(1.0 - diag["decision_refusal_prefix_first_token_mass"])
+        diagnostics.append(diag)
+        refusal_scores.append(score_refusal_templates(model, tokenizer, input_ids_list[i])
+                              if score_refusal else None)
 
-    return texts, span_confs, decision_confs, mean_confs
+    return texts, span_confs, decision_confs, mean_confs, diagnostics, refusal_scores
 
 
 def _free_cuda():
     try:
-        
+        import gc
         import torch
         gc.collect()
         torch.cuda.empty_cache()
@@ -587,7 +607,7 @@ def _partial_count(mk: str, name: str, dataset: str) -> int:
 
 
 def load_examples(dataset: str, limit: Optional[int], strategies: Optional[List[str]]):
-    
+    import importlib
     mod_name, fn = DATASET_LOADERS[dataset]
     mod = importlib.import_module(mod_name)
     kwargs: Dict[str, Any] = {"strategies": strategies, "limit": limit}
@@ -675,15 +695,20 @@ def _process_unit(model, tok, fam, mk, name, dataset, examples, max_new_tokens,
                 batch_ids.append(ids)
 
             # one batched forward pass: texts + all three confidence channels
-            texts, sconfs, dconfs, mconfs = generate_batch(model, tok, batch_ids, max_new_tokens)
+            texts, sconfs, dconfs, mconfs, diagnostics, refusal_scores = generate_batch(
+                model, tok, batch_ids, max_new_tokens)
 
-            for (ex_id, ex), text, sconf, dconf, mconf in zip(chunk, texts, sconfs, dconfs, mconfs):
+            for (ex_id, ex), text, sconf, dconf, mconf, diag, refusal_score in zip(
+                    chunk, texts, sconfs, dconfs, mconfs, diagnostics, refusal_scores):
                 # PRIMARY channel = answer-span exp(mean logprob), ported from
                 # the ID pipeline so ID and OOD tables join like-for-like.
                 # decision (abstain-mass) and mean-prob kept as extra columns.
                 r = annotate(ex, text, token_confidence=sconf)
                 r["token_confidence_decision"] = dconf
                 r["token_confidence_mean"] = mconf
+                r.update(diag)
+                if refusal_score is not None:
+                    r.update(refusal_score)
                 r["id"] = ex_id
                 r["model_id"] = mk
                 r["ratio"] = name
@@ -828,6 +853,7 @@ def _partition(plan, num_workers, include_base):
 
 def _detect_gpus() -> List[int]:
     try:
+        import torch
         return list(range(torch.cuda.device_count()))
     except Exception:
         return []
@@ -1016,10 +1042,32 @@ def _print_comparison(rows):
             print("".join(f"{str(c):<13}" for c in cells))
 
 
+def _clean_locks(lock_ttl: float = 0.0):
+    """Remove orphaned locks: dead-pid (same host) OR older than lock_ttl (any
+    host). Pass lock_ttl=0 to remove only dead-pid same-host locks."""
+    host = socket.gethostname()
+    removed = 0
+    for lk in glob.glob(os.path.join(OUTPUT_DIR, "**", "predictions.jsonl.lock"), recursive=True):
+        try:
+            parts = open(lk).read().split()
+            pid = int(parts[0]); h = parts[2] if len(parts) > 2 else None
+        except Exception:
+            pid, h = None, None
+        try:
+            age = time.time() - os.path.getmtime(lk)
+        except OSError:
+            age = None
+        dead_here = (pid is None) or (h == host and not _pid_alive(pid))
+        timed_out = (lock_ttl and age is not None and age > lock_ttl)
+        if dead_here or timed_out:
+            _unlink(lk); removed += 1
+            print(f"[clean] removed lock {lk}")
+    print(f"[clean] removed {removed} lock(s)")
+
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", nargs="?", default="run", choices=["run", "collect"])
+    ap.add_argument("mode", nargs="?", default="run", choices=["run", "collect", "clean-locks"])
     ap.add_argument("--models", nargs="*", default=list(MODEL_PRESETS))
     ap.add_argument("--datasets", nargs="*", default=list(DATASET_LOADERS))
     ap.add_argument("--strategies", nargs="*", default=None)
@@ -1041,14 +1089,22 @@ def main():
     ap.add_argument("--save-every", type=int, default=1,
                     help="flush the partial file once at least N new examples have "
                          "been written (flushing is checked per batch)")
+    ap.add_argument("--save-token-traces", action="store_true",
+                    help="save compact per-answer token traces (default: scalars only)")
+    ap.add_argument("--score-refusal-templates", action="store_true",
+                    help="optional teacher-forced refusal-template ranking probe (adds a forward pass)")
     ap.add_argument("--no-collect", action="store_true",
                     help="skip the automatic collect() after run")
     ap.add_argument("--dry-run", action="store_true",
                     help="print discovered adapter map + example counts, load no weights")
     a = ap.parse_args()
+    os.environ["SAVE_TOKEN_TRACES"] = "1" if a.save_token_traces else "0"
+    os.environ["SCORE_REFUSAL_TEMPLATES"] = "1" if a.score_refusal_templates else "0"
 
     if a.mode == "collect":
         collect(); return
+    if a.mode == "clean-locks":
+        _clean_locks(a.lock_ttl); return
     if a.dry_run:
         dry_run(a.models, a.datasets, a.strategies, a.limit); return
 
